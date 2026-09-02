@@ -67,6 +67,32 @@ The first run downloads two small MediaPipe model files (~15MB total)
 from Google's servers and caches them in `models/`. This requires
 internet access once; after that it works fully offline.
 
+### `OSError: libEGL.so.1: cannot open shared object file`
+
+MediaPipe's native runtime needs a handful of OpenGL/EGL system
+libraries even when nothing gets displayed on screen (common on
+headless Linux servers, minimal Docker base images, and some WSL
+setups). Install them via your system package manager:
+
+**Debian/Ubuntu:**
+```bash
+sudo apt-get update && sudo apt-get install -y \
+    libgl1 libglib2.0-0 libegl1 libgles2 libsm6 libxext6 libxrender1 ffmpeg
+```
+
+**Fedora/RHEL:**
+```bash
+sudo dnf install -y mesa-libGL mesa-libEGL mesa-libGLES glib2 libSM libXext libXrender ffmpeg
+```
+
+**macOS:** this error is Linux-specific; it shouldn't occur.
+
+**Docker:** already handled — the provided `Dockerfile` installs these.
+
+**Streamlit Community Cloud:** already handled — the provided
+`packages.txt` tells Streamlit Cloud to apt-install these automatically
+on deploy (make sure it stays in the repo root next to `app.py`).
+
 ### Offline / no-internet setup
 
 If the machine running the app has no internet access, download the
@@ -78,13 +104,31 @@ directory pointed to by the `SIGN_MODEL_DIR` env var) before starting:
 
 ### Building a vocabulary
 
-The app starts with **zero words** — you have to teach it. In the
-"Build Vocabulary" tab, upload a few-second clip of one sign at a time
-(hands at rest just before/after the sign), label it with the English
-word, and click "Add to vocabulary." Add 2–3 examples per word for
-noticeably better accuracy. Templates are stored as `.npy` landmark
-files + a `manifest.json` under `templates/` — back that folder up if
-you invest time building a vocabulary.
+The app starts with **zero words** — you have to teach it. Two ways:
+
+- **One clip per word** ("Build Vocabulary" tab): upload a few-second
+  clip of one sign at a time (hands at rest just before/after the sign),
+  label it, click "Add to vocabulary."
+- **Batch, from one video** ("Batch Add" tab, or `batch_add.py` from the
+  command line): record yourself signing a *list of words in a row*,
+  with a clear pause between each one, then give the app that same word
+  list (in order). It auto-detects each sign's start/end from the pauses
+  and saves them all as templates in one pass — much faster than
+  recording separate clips. Preview the detected segment count against
+  your word count before committing; if they don't match, adjust the
+  motion threshold (lower catches smaller movements but may over-split
+  a single sign; higher requires bigger movements but may merge two
+  signs together) and re-preview.
+
+  CLI equivalent:
+  ```bash
+  python batch_add.py my_video.mp4 "hello,thank you,water,please"
+  ```
+
+Either way, add 2–3 examples per word for noticeably better accuracy.
+Templates are stored as `.npy` landmark files + a `manifest.json` under
+`templates/` — back that folder up if you invest time building a
+vocabulary.
 
 ### Optional: fluent-sentence polishing
 
@@ -100,7 +144,10 @@ sentence.
 
 1. Push this folder to a GitHub repo.
 2. Go to [share.streamlit.io](https://share.streamlit.io), connect the
-   repo, set the main file to `app.py`, and deploy.
+   repo, set the main file to `app.py`, and deploy. The included
+   `packages.txt` makes it auto-install the system libraries MediaPipe
+   needs (see the `libEGL.so.1` troubleshooting note above) — no
+   manual step required.
 3. The `templates/` directory on Streamlit Cloud is **ephemeral** —
    it resets on redeploy/restart. For a persistent vocabulary, either
    commit a starter `templates/` folder to the repo, or point
@@ -137,9 +184,11 @@ your vocabulary survives container restarts. Open `http://localhost:8501`.
 | `models.py`        | Downloads/caches the MediaPipe model files            |
 | `segmentation.py`  | Splits continuous signing into candidate sign chunks  |
 | `templates.py`     | Vocabulary storage (add/remove/load example signs)    |
+| `batch_add.py`     | Split one multi-word video into many labeled templates at once |
 | `recognizer.py`    | DTW nearest-neighbor matching                         |
 | `sentence.py`      | Gloss sequence → sentence (rule-based or Claude-polished) |
 | `requirements.txt` | Python dependencies                                    |
+| `packages.txt`     | System (apt) libraries MediaPipe needs — used by Streamlit Cloud |
 | `Dockerfile`       | Container build for deployment                        |
 
 ## Known limitations

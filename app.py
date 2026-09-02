@@ -19,6 +19,7 @@ from segmentation import segment_signs
 import templates as tpl
 from recognizer import recognize_video
 from sentence import rule_based_sentence, polish_with_claude
+import batch_add
 
 TEMPLATE_DIR = os.environ.get("SIGN_TEMPLATE_DIR", "templates")
 
@@ -177,6 +178,73 @@ def render_vocabulary_tab(sample_fps):
                 os.unlink(clip_path)
 
 
+def render_batch_add_tab(sample_fps, motion_threshold):
+    st.subheader("Batch-add from one video")
+    st.caption(
+        "Faster than uploading one clip per word: record yourself signing a "
+        "*list of words in order*, with a clear pause between each one, then "
+        "type that same list here (same order). The app auto-detects each "
+        "sign's boundaries and saves them all as templates in one go."
+    )
+
+    clip = st.file_uploader(
+        "Video with multiple signs, performed in sequence with pauses between them",
+        type=["mp4", "mov", "avi", "mkv", "webm"], key="batch_upload")
+    words_text = st.text_area(
+        "Words, one per line, IN THE ORDER they're signed",
+        placeholder="hello\nthank you\nwater\nplease",
+        height=150,
+    )
+    words = [w.strip() for w in words_text.splitlines() if w.strip()]
+
+    col1, col2 = st.columns(2)
+    local_threshold = col1.slider("Motion threshold (this tab only)", 0.005, 0.10,
+                                   motion_threshold, 0.005, key="batch_threshold",
+                                   help="Adjust and re-preview if the detected segment "
+                                        "count doesn't match your word count.")
+    min_gap = col2.slider("Pause length required between signs (frames)", 1, 15, 3,
+                           key="batch_min_gap")
+
+    if clip is not None and st.button("Preview segments", type="primary"):
+        clip_path = save_upload_to_tempfile(clip)
+        try:
+            with st.spinner("Extracting landmarks and detecting sign boundaries..."):
+                frames, segments = batch_add.preview_segments(
+                    clip_path, sample_fps=sample_fps,
+                    motion_threshold=local_threshold, min_gap_frames=min_gap)
+            st.session_state["batch_frames"] = frames
+            st.session_state["batch_segments"] = segments
+        finally:
+            os.unlink(clip_path)
+
+    segments = st.session_state.get("batch_segments")
+    frames = st.session_state.get("batch_frames")
+
+    if segments is not None:
+        st.markdown(f"### Detected {len(segments)} segment(s) — you listed {len(words)} word(s)")
+        n = max(len(segments), len(words))
+        for i in range(n):
+            seg_label = (f"`{segments[i][2]:.1f}s–{segments[i][3]:.1f}s`"
+                         if i < len(segments) else "*(no segment detected)*")
+            word_label = words[i] if i < len(words) else "*(no word given)*"
+            st.write(f"{i+1}. {seg_label}  →  **{word_label}**")
+
+        if len(segments) != len(words):
+            st.warning(
+                "Counts don't match, so nothing can be saved yet. Try lowering the "
+                "motion threshold if signs got merged together, or raising it if "
+                "one sign got split into two — then preview again."
+            )
+        else:
+            if st.button("Save all as templates", type="primary"):
+                saved = batch_add.commit_segments(TEMPLATE_DIR, frames, segments, words)
+                st.success(f"Saved {len(saved)} template(s): " +
+                           ", ".join(w for w, _ in saved))
+                del st.session_state["batch_frames"]
+                del st.session_state["batch_segments"]
+                st.rerun()
+
+
 def main():
     st.title("🤟 Sign Language → Text")
     st.caption("Upload a video, get an English transcript. Powered by MediaPipe "
@@ -184,11 +252,13 @@ def main():
 
     sample_fps, motion_threshold, use_claude, api_key = render_sidebar()
 
-    tab1, tab2 = st.tabs(["Translate a Video", "Build Vocabulary"])
+    tab1, tab2, tab3 = st.tabs(["Translate a Video", "Build Vocabulary", "Batch Add"])
     with tab1:
         render_translate_tab(sample_fps, motion_threshold, use_claude, api_key)
     with tab2:
         render_vocabulary_tab(sample_fps)
+    with tab3:
+        render_batch_add_tab(sample_fps, motion_threshold)
 
 
 if __name__ == "__main__":
